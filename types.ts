@@ -14,11 +14,24 @@ export interface UserInput {
   hourPillar: string;  // 时柱
   startAge: string;    // 起运年龄 (虚岁) - Changed to string to handle input field state easily, parse later
   firstDaYun: string;  // 第一步大运干支
-  
+  yearLimit: string;   // 推演年限
+  maxYearsPerRequest: string; // 单次查询最大年限
+
   // New API Configuration Fields
   modelName: string;   // 使用的模型名称
   apiBaseUrl: string;
   apiKey: string;
+  debugMode?: boolean;
+}
+
+export interface DebugInfo {
+  enabled: boolean;
+  requestPayload: string;
+  backendResponse?: string;
+  modelRawContent?: string;
+  cleanedModelContent?: string;
+  parseError?: string;
+  responseStatus?: number;
 }
 
 export interface KLinePoint {
@@ -58,4 +71,5 @@ export interface AnalysisData {
 export interface LifeDestinyResult {
   chartData: KLinePoint[];
   analysis: AnalysisData;
+  debugInfo?: DebugInfo;
 }

@@ -19,9 +19,12 @@ const BaziForm: React.FC<BaziFormProps> = ({ onSubmit, isLoading }) => {
     hourPillar: '',
     startAge: '',
     firstDaYun: '',
+    yearLimit: '100',
+    maxYearsPerRequest: '100',
     modelName: 'gemini-3-pro-preview',
     apiBaseUrl: 'https://max.openai365.top/v1',
     apiKey: '',
+    debugMode: false,
   });
 
   const [formErrors, setFormErrors] = useState<{modelName?: string, apiBaseUrl?: string, apiKey?: string}>({});
@@ -227,6 +230,34 @@ const BaziForm: React.FC<BaziFormProps> = ({ onSubmit, isLoading }) => {
               />
             </div>
             <div>
+              <label className="block text-xs font-bold text-gray-600 mb-1">推演年限</label>
+              <input
+                type="number"
+                name="yearLimit"
+                required
+                min="1"
+                max="100"
+                value={formData.yearLimit}
+                onChange={handleChange}
+                placeholder="如: 100"
+                className="w-full px-3 py-2 border border-indigo-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white text-center font-bold"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-gray-600 mb-1">单次查询最大年限</label>
+              <input
+                type="number"
+                name="maxYearsPerRequest"
+                required
+                min="1"
+                max="100"
+                value={formData.maxYearsPerRequest}
+                onChange={handleChange}
+                placeholder="如: 10"
+                className="w-full px-3 py-2 border border-indigo-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white text-center font-bold"
+              />
+            </div>
+            <div>
               <label className="block text-xs font-bold text-gray-600 mb-1">第一步大运</label>
               <input
                 type="text"
@@ -278,7 +309,7 @@ const BaziForm: React.FC<BaziFormProps> = ({ onSubmit, isLoading }) => {
              </div>
              <div>
                <label className="block text-xs font-bold text-gray-600 mb-1">API Key</label>
-               <input
+              <input
                   type="password"
                   name="apiKey"
                   value={formData.apiKey}
@@ -288,6 +319,16 @@ const BaziForm: React.FC<BaziFormProps> = ({ onSubmit, isLoading }) => {
                 />
                 {formErrors.apiKey && <p className="text-red-500 text-xs mt-1">{formErrors.apiKey}</p>}
              </div>
+             <label className="flex items-center gap-2 rounded-lg border border-dashed border-gray-300 bg-white px-3 py-2 text-xs text-gray-600">
+               <input
+                 type="checkbox"
+                 name="debugMode"
+                 checked={Boolean(formData.debugMode)}
+                 onChange={(e) => setFormData((prev) => ({ ...prev, debugMode: e.target.checked }))}
+                 className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+               />
+               <span>开启 Debug 模式，显示提交与接收的原始格式</span>
+             </label>
           </div>
         </div>
 

@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import BaziForm from './components/BaziForm';
 import LifeKLineChart from './components/LifeKLineChart';
 import AnalysisResult from './components/AnalysisResult';
-import { UserInput, LifeDestinyResult } from './types';
+import { UserInput, LifeDestinyResult, DebugInfo } from './types';
 import { generateLifeAnalysis } from './services/geminiService';
 import { API_STATUS } from './constants';
 import { Sparkles, AlertCircle, BookOpen, Key } from 'lucide-react';
@@ -13,6 +13,7 @@ const App: React.FC = () => {
   const [result, setResult] = useState<LifeDestinyResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [userName, setUserName] = useState<string>('');
+  const [debugInfo, setDebugInfo] = useState<DebugInfo | null>(null);
 
   const handleFormSubmit = async (data: UserInput) => {
     // 检查系统状态
@@ -25,16 +26,61 @@ const App: React.FC = () => {
     setLoading(true);
     setError(null);
     setResult(null);
+    setDebugInfo(null);
     setUserName(data.name || '');
 
     try {
       const analysis = await generateLifeAnalysis(data);
       setResult(analysis);
+      setDebugInfo(analysis.debugInfo || null);
     } catch (err: any) {
       setError(err.message || "命理测算过程中发生了意外错误，请重试。");
+      setDebugInfo(err.debugInfo || null);
     } finally {
       setLoading(false);
     }
+  };
+
+  const renderDebugPanel = () => {
+    if (!debugInfo?.enabled) return null;
+
+    const sections = [
+      { title: '提交给后端的请求体', content: debugInfo.requestPayload },
+      { title: '后端原始响应', content: debugInfo.backendResponse },
+      { title: '模型原始文本', content: debugInfo.modelRawContent },
+      { title: '清洗后的文本', content: debugInfo.cleanedModelContent },
+      { title: '解析错误', content: debugInfo.parseError },
+    ].filter((section) => section.content);
+
+    if (sections.length === 0) return null;
+
+    return (
+      <section className="w-full max-w-5xl rounded-2xl border border-amber-200 bg-amber-50 p-5 shadow-sm">
+        <div className="mb-4 flex items-center justify-between gap-3 border-b border-amber-200 pb-3">
+          <div>
+            <h3 className="text-lg font-bold text-amber-950">Debug 信息</h3>
+            <p className="text-sm text-amber-800">
+              当前模式会显示原始请求与返回内容，便于排查格式问题。
+            </p>
+          </div>
+          {typeof debugInfo.responseStatus === 'number' && (
+            <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-amber-700 border border-amber-200">
+              HTTP {debugInfo.responseStatus}
+            </span>
+          )}
+        </div>
+        <div className="space-y-4">
+          {sections.map((section) => (
+            <div key={section.title} className="space-y-2">
+              <h4 className="text-sm font-bold text-amber-900">{section.title}</h4>
+              <pre className="max-h-80 overflow-auto rounded-xl bg-slate-950 p-4 text-xs leading-6 text-slate-100 whitespace-pre-wrap break-words">
+                {section.content}
+              </pre>
+            </div>
+          ))}
+        </div>
+      </section>
+    );
   };
 
   return (
@@ -114,6 +160,8 @@ const App: React.FC = () => {
                 <p className="text-sm font-bold">{error}</p>
               </div>
             )}
+
+            {renderDebugPanel()}
           </div>
         )}
 
@@ -137,7 +185,7 @@ const App: React.FC = () => {
             <section className="space-y-4">
               <h3 className="text-xl font-bold text-gray-700 flex items-center gap-2">
                  <span className="w-1 h-6 bg-indigo-600 rounded-full"></span>
-                 流年大运走势图 (100年)
+                 流年大运走势图 ({result.chartData.length}年)
               </h3>
               <p className="text-sm text-gray-500 mb-2">
                 <span className="text-green-600 font-bold">绿色K线</span> 代表运势上涨（吉），
@@ -151,6 +199,8 @@ const App: React.FC = () => {
             <section>
                <AnalysisResult analysis={result.analysis} />
             </section>
+
+            {renderDebugPanel()}
           </div>
         )}
       </main>

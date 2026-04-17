@@ -10,13 +10,33 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+.vite
+coverage
 *.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.py[cod]
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.venv/
+venv/
+env/
+ENV/
 
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
 .idea
 .DS_Store
+.DS_Store?
+Thumbs.db
 *.suo
 *.ntvs*
 *.njsproj
