@@ -1,4 +1,4 @@
 interface:
   display_name: "LifeKLine Maintainer"
-  short_description: "Maintain the LifeKLine app and its prompt/API workflow"
-  default_prompt: "Use $lifekline-maintainer to update the LifeKLine repo safely and keep its UI, prompt, and API contracts aligned."
+  short_description: "Maintain LifeKLine UI, prompts, backend, and contracts"
+  default_prompt: "Use $lifekline-maintainer to update the LifeKLine repo while keeping its segmented analysis flow and frontend/backend contracts aligned."

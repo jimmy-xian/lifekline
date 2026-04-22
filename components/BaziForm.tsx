@@ -21,6 +21,7 @@ const BaziForm: React.FC<BaziFormProps> = ({ onSubmit, isLoading }) => {
     firstDaYun: '',
     yearLimit: '100',
     maxYearsPerRequest: '100',
+    queryStrategy: 'plan1',
     modelName: 'gemini-3-pro-preview',
     apiBaseUrl: 'https://max.openai365.top/v1',
     apiKey: '',
@@ -214,6 +215,35 @@ const BaziForm: React.FC<BaziFormProps> = ({ onSubmit, isLoading }) => {
             <TrendingUp className="w-4 h-4" />
             <span>大运排盘信息 (必填)</span>
           </div>
+          <div className="mb-4 space-y-2">
+            <label className="block text-xs font-bold text-gray-600">查询方案</label>
+            <div className="grid grid-cols-1 gap-2">
+              <label className={`rounded-xl border px-3 py-3 text-sm transition ${formData.queryStrategy === 'plan1' ? 'border-indigo-500 bg-white shadow-sm' : 'border-indigo-100 bg-indigo-50/60'}`}>
+                <input
+                  type="radio"
+                  name="queryStrategy"
+                  value="plan1"
+                  checked={formData.queryStrategy === 'plan1'}
+                  onChange={handleChange}
+                  className="mr-2"
+                />
+                <span className="font-bold text-gray-800">方案 1</span>
+                <span className="ml-2 text-xs text-gray-500">总纲推演 + 分段流年推演</span>
+              </label>
+              <label className={`rounded-xl border px-3 py-3 text-sm transition ${formData.queryStrategy === 'plan2' ? 'border-indigo-500 bg-white shadow-sm' : 'border-indigo-100 bg-indigo-50/60'}`}>
+                <input
+                  type="radio"
+                  name="queryStrategy"
+                  value="plan2"
+                  checked={formData.queryStrategy === 'plan2'}
+                  onChange={handleChange}
+                  className="mr-2"
+                />
+                <span className="font-bold text-gray-800">方案 2</span>
+                <span className="ml-2 text-xs text-gray-500">原始单次整段推演</span>
+              </label>
+            </div>
+          </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-bold text-gray-600 mb-1">起运年龄 (虚岁)</label>
@@ -254,7 +284,8 @@ const BaziForm: React.FC<BaziFormProps> = ({ onSubmit, isLoading }) => {
                 value={formData.maxYearsPerRequest}
                 onChange={handleChange}
                 placeholder="如: 10"
-                className="w-full px-3 py-2 border border-indigo-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white text-center font-bold"
+                disabled={formData.queryStrategy === 'plan2'}
+                className="w-full px-3 py-2 border border-indigo-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none bg-white text-center font-bold disabled:bg-gray-100 disabled:text-gray-400"
               />
             </div>
             <div>
@@ -273,6 +304,9 @@ const BaziForm: React.FC<BaziFormProps> = ({ onSubmit, isLoading }) => {
            <p className="text-xs text-indigo-600/70 mt-2 text-center">
              当前大运排序规则：
              <span className="font-bold text-indigo-900">{daYunDirectionInfo}</span>
+          </p>
+          <p className="text-xs text-indigo-600/70 mt-2 text-center">
+            {formData.queryStrategy === 'plan1' ? '方案 1 会先做总纲，再按单次查询最大年限分段推演。' : '方案 2 会一次性请求完整年限结果。'}
           </p>
         </div>
 
