@@ -1,4 +1,5 @@
 import logging
+import asyncio
 import time
 import uuid
 from typing import Any
@@ -48,7 +49,7 @@ def build_chat_completions_url(api_base_url: str) -> str:
     normalized = api_base_url.rstrip("/")
     if normalized.endswith("/chat/completions"):
         return normalized
-    if normalized.endswith("/v1"):
+    if normalized.endswith("/v1") or normalized.endswith("/api/coding/v3"):
         return f"{normalized}/chat/completions"
     return f"{normalized}/v1/chat/completions"
 
@@ -70,6 +71,57 @@ def extract_text_content(content: Any) -> str:
             return "".join(text_parts)
 
     raise HTTPException(status_code=502, detail="上游模型未返回可解析的文本内容。")
+
+
+def get_retry_delay_seconds(response: httpx.Response, attempt: int) -> float:
+    retry_after = response.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return max(0.0, float(retry_after))
+        except ValueError:
+            pass
+    return float(attempt)
+
+
+async def post_with_retry(
+    url: str,
+    payload: dict[str, Any],
+    headers: dict[str, str],
+    request_id: str,
+) -> httpx.Response:
+    last_error: Exception | None = None
+    max_attempts = 4
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            logger.info("[%s] 上游请求尝试 attempt=%s", request_id, attempt)
+            async with httpx.AsyncClient(timeout=600, http2=False) as client:
+                response = await client.post(url, json=payload, headers=headers)
+            if response.status_code == 429 and attempt < max_attempts:
+                delay = get_retry_delay_seconds(response, attempt)
+                logger.warning(
+                    "[%s] 上游返回 429 attempt=%s retry_in=%.2fs",
+                    request_id,
+                    attempt,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+            return response
+        except httpx.RequestError as exc:
+            last_error = exc
+            logger.warning(
+                "[%s] 上游请求异常 attempt=%s error_type=%s error=%r",
+                request_id,
+                attempt,
+                type(exc).__name__,
+                exc,
+            )
+            if attempt < max_attempts:
+                await asyncio.sleep(1.0 * attempt)
+
+    assert last_error is not None
+    raise last_error
 
 
 @app.get("/health")
@@ -107,11 +159,16 @@ async def chat(request: ChatRequest) -> dict[str, str]:
     logger.info("[%s] 开始请求上游模型接口 url=%s", request_id, url)
 
     try:
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            response = await client.post(url, json=payload, headers=headers)
+        response = await post_with_retry(url, payload, headers, request_id)
     except httpx.RequestError as exc:
         elapsed = time.perf_counter() - started_at
-        logger.exception("[%s] 上游请求异常 elapsed=%.2fs", request_id, elapsed)
+        logger.exception(
+            "[%s] 上游请求异常 elapsed=%.2fs error_type=%s error=%r",
+            request_id,
+            elapsed,
+            type(exc).__name__,
+            exc,
+        )
         raise HTTPException(
             status_code=502,
             detail=f"无法连接上游模型接口：{exc}",

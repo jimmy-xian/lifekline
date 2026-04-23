@@ -3,30 +3,58 @@ import React, { useState, useMemo } from 'react';
 import { UserInput, Gender } from '../types';
 import { Loader2, Sparkles, AlertCircle, TrendingUp, Settings } from 'lucide-react';
 
+const FORM_CACHE_KEY = 'lifekline:bazi-form-cache';
+
+const DEFAULT_FORM_DATA: UserInput = {
+  name: '',
+  gender: Gender.MALE,
+  birthYear: '',
+  yearPillar: '',
+  monthPillar: '',
+  dayPillar: '',
+  hourPillar: '',
+  startAge: '',
+  firstDaYun: '',
+  yearLimit: '100',
+  maxYearsPerRequest: '100',
+  queryStrategy: 'plan1',
+  modelName: 'gemini-3-pro-preview',
+  apiBaseUrl: 'https://max.openai365.top/v1',
+  apiKey: '',
+  debugMode: false,
+};
+
+const loadCachedFormData = (): UserInput => {
+  if (typeof window === 'undefined') {
+    return DEFAULT_FORM_DATA;
+  }
+
+  try {
+    const cached = window.localStorage.getItem(FORM_CACHE_KEY);
+    if (!cached) {
+      return DEFAULT_FORM_DATA;
+    }
+
+    const parsed = JSON.parse(cached) as Partial<UserInput>;
+    return {
+      ...DEFAULT_FORM_DATA,
+      ...parsed,
+      gender: parsed.gender === Gender.FEMALE ? Gender.FEMALE : Gender.MALE,
+      queryStrategy: parsed.queryStrategy === 'plan2' || parsed.queryStrategy === 'plan3' ? parsed.queryStrategy : 'plan1',
+      debugMode: Boolean(parsed.debugMode),
+    };
+  } catch {
+    return DEFAULT_FORM_DATA;
+  }
+};
+
 interface BaziFormProps {
   onSubmit: (data: UserInput) => void;
   isLoading: boolean;
 }
 
 const BaziForm: React.FC<BaziFormProps> = ({ onSubmit, isLoading }) => {
-  const [formData, setFormData] = useState<UserInput>({
-    name: '',
-    gender: Gender.MALE,
-    birthYear: '',
-    yearPillar: '',
-    monthPillar: '',
-    dayPillar: '',
-    hourPillar: '',
-    startAge: '',
-    firstDaYun: '',
-    yearLimit: '100',
-    maxYearsPerRequest: '100',
-    queryStrategy: 'plan1',
-    modelName: 'gemini-3-pro-preview',
-    apiBaseUrl: 'https://max.openai365.top/v1',
-    apiKey: '',
-    debugMode: false,
-  });
+  const [formData, setFormData] = useState<UserInput>(loadCachedFormData);
 
   const [formErrors, setFormErrors] = useState<{modelName?: string, apiBaseUrl?: string, apiKey?: string}>({});
 
@@ -57,6 +85,12 @@ const BaziForm: React.FC<BaziFormProps> = ({ onSubmit, isLoading }) => {
     if (Object.keys(errors).length > 0) {
       setFormErrors(errors);
       return;
+    }
+
+    try {
+      window.localStorage.setItem(FORM_CACHE_KEY, JSON.stringify(formData));
+    } catch (error) {
+      console.warn('[LifeKLine] 保存表单缓存失败', error);
     }
 
     onSubmit(formData);
@@ -242,6 +276,18 @@ const BaziForm: React.FC<BaziFormProps> = ({ onSubmit, isLoading }) => {
                 <span className="font-bold text-gray-800">方案 2</span>
                 <span className="ml-2 text-xs text-gray-500">原始单次整段推演</span>
               </label>
+              <label className={`rounded-xl border px-3 py-3 text-sm transition ${formData.queryStrategy === 'plan3' ? 'border-indigo-500 bg-white shadow-sm' : 'border-indigo-100 bg-indigo-50/60'}`}>
+                <input
+                  type="radio"
+                  name="queryStrategy"
+                  value="plan3"
+                  checked={formData.queryStrategy === 'plan3'}
+                  onChange={handleChange}
+                  className="mr-2"
+                />
+                <span className="font-bold text-gray-800">方案 3</span>
+                <span className="ml-2 text-xs text-gray-500">总纲 + 顺序滚动分段 + 连续性锚点</span>
+              </label>
             </div>
           </div>
           <div className="grid grid-cols-2 gap-4">
@@ -306,7 +352,11 @@ const BaziForm: React.FC<BaziFormProps> = ({ onSubmit, isLoading }) => {
              <span className="font-bold text-indigo-900">{daYunDirectionInfo}</span>
           </p>
           <p className="text-xs text-indigo-600/70 mt-2 text-center">
-            {formData.queryStrategy === 'plan1' ? '方案 1 会先做总纲，再按单次查询最大年限分段推演。' : '方案 2 会一次性请求完整年限结果。'}
+            {formData.queryStrategy === 'plan1'
+              ? '方案 1 会先做总纲，再按单次查询最大年限分段推演。'
+              : formData.queryStrategy === 'plan2'
+                ? '方案 2 会一次性请求完整年限结果。'
+                : '方案 3 会先做总纲，再按顺序滚动分段，并把上一段尾部结果作为连续性锚点。'}
           </p>
         </div>
 

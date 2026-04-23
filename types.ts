@@ -16,7 +16,7 @@ export interface UserInput {
   firstDaYun: string;  // 第一步大运干支
   yearLimit: string;   // 推演年限
   maxYearsPerRequest: string; // 单次查询最大年限
-  queryStrategy: 'plan1' | 'plan2'; // 查询方案
+  queryStrategy: 'plan1' | 'plan2' | 'plan3'; // 查询方案
 
   // New API Configuration Fields
   modelName: string;   // 使用的模型名称

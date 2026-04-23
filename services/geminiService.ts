@@ -1,4 +1,4 @@
-import { UserInput, LifeDestinyResult, Gender, DebugInfo } from "../types";
+import { UserInput, LifeDestinyResult, Gender, DebugInfo, KLinePoint } from "../types";
 import { BAZI_SYSTEM_INSTRUCTION } from "../constants";
 
 // Helper to determine stem polarity (保留这个辅助函数，因为生成提示词还需要它)
@@ -51,6 +51,43 @@ const normalizeChartPoints = (chartPoints: any[], startAge: number, endAge: numb
   }
 
   return Array.from(uniquePoints.values()).sort((a, b) => a.age - b.age);
+};
+
+const clampScore = (value: number) => Math.max(0, Math.min(100, Math.round(value)));
+
+const buildRollingAnchorSummary = (chartPoints: KLinePoint[]) => {
+  const anchorPoints = chartPoints.slice(-3);
+  if (anchorPoints.length === 0) {
+    return "";
+  }
+
+  return anchorPoints.map((point) => (
+    `- Age ${point.age}: daYun=${point.daYun || '未知'}, ganZhi=${point.ganZhi || '未知'}, open=${point.open}, close=${point.close}, high=${point.high}, low=${point.low}, score=${point.score}`
+  )).join('\n');
+};
+
+const alignChunkWithPrevious = (previousPoints: KLinePoint[], currentPoints: KLinePoint[]) => {
+  if (previousPoints.length === 0 || currentPoints.length === 0) {
+    return currentPoints;
+  }
+
+  const previousLastPoint = previousPoints[previousPoints.length - 1];
+  const currentFirstPoint = currentPoints[0];
+  const baselineOffset = previousLastPoint.close - currentFirstPoint.open;
+
+  if (Math.abs(baselineOffset) <= 6) {
+    return currentPoints;
+  }
+
+  const appliedOffset = Math.round(baselineOffset * 0.7);
+  return currentPoints.map((point) => ({
+    ...point,
+    open: clampScore(point.open + appliedOffset),
+    close: clampScore(point.close + appliedOffset),
+    high: clampScore(point.high + appliedOffset),
+    low: clampScore(point.low + appliedOffset),
+    score: clampScore(point.score + appliedOffset),
+  }));
 };
 
 const validateChartPoints = (
@@ -111,6 +148,8 @@ const buildMasterGuide = (analysis: ReturnType<typeof extractAnalysis>) => `
 - 不允许后续分段与总纲在核心判断上自相矛盾。
 `.trim();
 
+const isMissingChartPointsError = (data: any) => !data?.chartPoints || !Array.isArray(data.chartPoints);
+
 const appendDebugRequest = (debugInfo: DebugInfo, title: string, requestBody: Record<string, unknown>, apiKey: string) => {
   debugInfo.requestPayload = appendDebugSection(
     debugInfo.requestPayload,
@@ -144,6 +183,46 @@ const appendDebugModelText = (debugInfo: DebugInfo, title: string, rawContent: s
   );
 };
 
+const createDebugInfo = (enabled: boolean): DebugInfo => ({
+  enabled,
+  requestPayload: '',
+});
+
+const mergeDebugInfo = (target: DebugInfo, source?: DebugInfo) => {
+  if (!source) {
+    return target;
+  }
+
+  if (source.requestPayload) {
+    target.requestPayload = target.requestPayload
+      ? `${target.requestPayload}\n\n${source.requestPayload}`
+      : source.requestPayload;
+  }
+  if (source.backendResponse) {
+    target.backendResponse = target.backendResponse
+      ? `${target.backendResponse}\n\n${source.backendResponse}`
+      : source.backendResponse;
+  }
+  if (source.modelRawContent) {
+    target.modelRawContent = target.modelRawContent
+      ? `${target.modelRawContent}\n\n${source.modelRawContent}`
+      : source.modelRawContent;
+  }
+  if (source.cleanedModelContent) {
+    target.cleanedModelContent = target.cleanedModelContent
+      ? `${target.cleanedModelContent}\n\n${source.cleanedModelContent}`
+      : source.cleanedModelContent;
+  }
+  if (source.parseError) {
+    target.parseError = source.parseError;
+  }
+  if (typeof source.responseStatus === 'number') {
+    target.responseStatus = source.responseStatus;
+  }
+
+  return target;
+};
+
 const executeModelRequest = async (
   label: string,
   requestBody: Record<string, unknown>,
@@ -166,23 +245,32 @@ const executeModelRequest = async (
     elapsedMs: Date.now() - requestStartedAt,
   });
 
+  const responseText = await response.text();
+
   if (!response.ok) {
     let errMessage = `请求失败: ${response.status}`;
     try {
-      const errJson = await response.json();
+      const errJson = JSON.parse(responseText);
       appendDebugResponse(debugInfo, `后端原始响应 ${label}`, JSON.stringify(errJson, null, 2));
       errMessage = `${errMessage} - ${errJson.detail || errJson.error || JSON.stringify(errJson)}`;
     } catch {
-      const errText = await response.text();
-      appendDebugResponse(debugInfo, `后端原始响应 ${label}`, errText);
-      errMessage = `${errMessage} - ${errText}`;
+      appendDebugResponse(debugInfo, `后端原始响应 ${label}`, responseText);
+      errMessage = `${errMessage} - ${responseText}`;
     }
     const error = new Error(`${label} 失败：${errMessage}`) as Error & { debugInfo?: DebugInfo };
     error.debugInfo = debugInfo;
     throw error;
   }
 
-  const jsonResponse = await response.json();
+  let jsonResponse;
+  try {
+    jsonResponse = JSON.parse(responseText);
+  } catch (e) {
+    appendDebugResponse(debugInfo, `后端原始响应 ${label}`, responseText);
+    const error = new Error(`${label} 后端返回的不是合法 JSON。`) as Error & { debugInfo?: DebugInfo };
+    error.debugInfo = debugInfo;
+    throw error;
+  }
   appendDebugResponse(debugInfo, `后端原始响应 ${label}`, JSON.stringify(jsonResponse, null, 2));
 
   const content = jsonResponse.result;
@@ -305,10 +393,122 @@ ${masterGuide}
 3. 保持与第一阶段总纲完全一致的判断口径。
   `;
 
-  const debugInfo: DebugInfo = {
-    enabled: Boolean(input.debugMode),
-    requestPayload: '',
+  const buildRollingChunkPrompt = (
+    startAge: number,
+    endAge: number,
+    masterGuide: string,
+    anchorSummary: string
+  ) => `
+${baseContextPrompt}
+
+【第一阶段总纲，必须作为本次推演的固定依据】
+${masterGuide}
+
+【上一段尾部连续性锚点】
+${anchorSummary || '- 本段为首段，无上一段锚点。'}
+
+【第二阶段任务：顺序滚动分段推演】
+- 本次只输出 Age ${startAge} 到 ${endAge} 的数据。
+- chartPoints 必须严格返回 ${endAge - startAge + 1} 条数据。
+- age 必须从 ${startAge} 连续到 ${endAge}，不能包含范围外年龄。
+- 本次不要重复输出新的命理总评，请沿用第一阶段总纲。
+- 若存在上一段尾部锚点，本段必须与锚点保持数值连续，不可无故整体抬升或整体塌陷。
+- 本段第一年 open 应尽量贴近上一段最后一年 close；除非换大运或出现明显冲合刑克，不允许出现断崖式跳变。
+- 本段延续时，请保持波动节奏自然，避免每段都重新设定一套全新的高低基线。
+
+任务：
+1. 生成 **${startAge}-${endAge} 岁 (虚岁)** 的人生流年K线数据。
+2. 在 \`reason\` 字段中提供流年详批。
+3. 保持与总纲及上一段尾部锚点一致的判断口径与数值连续性。
+  `;
+
+  const buildRollingChunkRetryPrompt = (
+    startAge: number,
+    endAge: number,
+    masterGuide: string,
+    anchorSummary: string
+  ) => `
+${baseContextPrompt}
+
+【固定总纲】
+${masterGuide}
+
+【上一段尾部连续性锚点】
+${anchorSummary || '- 本段为首段，无上一段锚点。'}
+
+【重试要求】
+- 你上一次输出缺少 \`chartPoints\` 或结构不完整。
+- 这一次只允许返回一个合法 JSON 对象，且对象里必须包含 \`chartPoints\` 数组。
+- 不要输出 Markdown，不要输出解释，不要输出省略号，不要截断。
+- 可以保留 \`bazi\` 等字段，也可以省略；但 \`chartPoints\` 必须完整。
+- \`chartPoints\` 必须严格返回 ${endAge - startAge + 1} 条，年龄从 ${startAge} 连续到 ${endAge}。
+- 若存在上一段尾部锚点，本段第一年 \`open\` 应尽量贴近上一段最后一年 \`close\`。
+- 每条 \`reason\` 控制在 40-60 字，优先保证 JSON 完整。
+
+请直接返回：
+{
+  "chartPoints": [
+    {
+      "age": ${startAge},
+      "year": ${Number(input.birthYear) + startAge - 1},
+      "daYun": "${startAge < startAgeInt ? '童限' : input.firstDaYun}",
+      "ganZhi": "示例",
+      "open": 50,
+      "close": 55,
+      "high": 60,
+      "low": 45,
+      "score": 55,
+      "reason": "简要流年判断"
+    }
+  ]
+}
+  `;
+
+  const executeModelRequestWithContentRetry = async (
+    label: string,
+    requestBodies: Record<string, unknown>[],
+    requestStartedAtMs: number,
+    debugInfo: DebugInfo,
+    validator?: (data: any) => string | null
+  ) => {
+    let lastError: (Error & { debugInfo?: DebugInfo }) | null = null;
+
+    for (let attempt = 0; attempt < requestBodies.length; attempt += 1) {
+      const currentLabel = requestBodies.length > 1 ? `${label} [尝试 ${attempt + 1}/${requestBodies.length}]` : label;
+
+      try {
+        const result = await executeModelRequest(
+          currentLabel,
+          requestBodies[attempt],
+          requestStartedAtMs,
+          debugInfo
+        );
+
+        if (validator) {
+          const validationError = validator(result.data);
+          if (validationError) {
+            throw new Error(validationError);
+          }
+        }
+
+        return result;
+      } catch (error) {
+        lastError = error as Error & { debugInfo?: DebugInfo };
+        if (attempt < requestBodies.length - 1) {
+          appendDebugResponse(
+            debugInfo,
+            `${label} 内容重试`,
+            `第 ${attempt + 1} 次返回结构异常，准备使用更严格的精简提示词重试。`
+          );
+          continue;
+        }
+      }
+    }
+
+    throw lastError || new Error(`${label} 失败。`);
   };
+
+  const debugInfo = createDebugInfo(Boolean(input.debugMode));
 
   try {
     console.info('[LifeKLine] 开始推演', {
@@ -388,41 +588,150 @@ ${masterGuide}
       masterGuide = buildMasterGuide(finalAnalysis);
       lastStatus = masterResult.status;
       appendDebugResponse(debugInfo, '总纲摘要', masterGuide);
+      if (input.queryStrategy === 'plan3') {
+        for (let chunkStart = 1; chunkStart <= yearLimitInt; chunkStart += maxYearsPerRequestInt) {
+          const chunkEnd = Math.min(yearLimitInt, chunkStart + maxYearsPerRequestInt - 1);
+          const anchorSummary = buildRollingAnchorSummary(chartData as KLinePoint[]);
+          const requestBody = {
+            prompt: buildRollingChunkPrompt(chunkStart, chunkEnd, masterGuide, anchorSummary),
+            systemInstruction: BAZI_SYSTEM_INSTRUCTION,
+            modelName: input.modelName,
+            apiBaseUrl: input.apiBaseUrl,
+            apiKey: input.apiKey,
+          };
+          const retryRequestBody = {
+            prompt: buildRollingChunkRetryPrompt(chunkStart, chunkEnd, masterGuide, anchorSummary),
+            systemInstruction: BAZI_SYSTEM_INSTRUCTION,
+            modelName: input.modelName,
+            apiBaseUrl: input.apiBaseUrl,
+            apiKey: input.apiKey,
+          };
+          const chunkDebugInfo = createDebugInfo(Boolean(input.debugMode));
+          appendDebugRequest(chunkDebugInfo, `提交给后端的请求体 方案3 ${chunkStart}-${chunkEnd}`, requestBody, input.apiKey);
+          appendDebugRequest(chunkDebugInfo, `提交给后端的请求体 方案3重试 ${chunkStart}-${chunkEnd}`, retryRequestBody, input.apiKey);
 
-      for (let chunkStart = 1; chunkStart <= yearLimitInt; chunkStart += maxYearsPerRequestInt) {
-        const chunkEnd = Math.min(yearLimitInt, chunkStart + maxYearsPerRequestInt - 1);
-        const requestBody = {
-          prompt: buildChunkPrompt(chunkStart, chunkEnd, masterGuide),
-          systemInstruction: BAZI_SYSTEM_INSTRUCTION,
-          modelName: input.modelName,
-          apiBaseUrl: input.apiBaseUrl,
-          apiKey: input.apiKey,
-        };
+          console.info('[LifeKLine] 开始方案3滚动分段推演', {
+            chunkStart,
+            chunkEnd,
+            hasMasterGuide: Boolean(masterGuide),
+            hasAnchorSummary: Boolean(anchorSummary),
+          });
 
-        appendDebugRequest(debugInfo, `提交给后端的请求体 ${chunkStart}-${chunkEnd}`, requestBody, input.apiKey);
+          try {
+            const { data, status } = await executeModelRequestWithContentRetry(
+              `方案3 ${chunkStart}-${chunkEnd} 岁滚动分段推演`,
+              [requestBody, retryRequestBody],
+              requestStartedAt,
+              chunkDebugInfo,
+              (resultData) => (isMissingChartPointsError(resultData) ? '缺失 chartPoints' : null)
+            );
 
-        console.info('[LifeKLine] 开始分段推演', {
-          chunkStart,
-          chunkEnd,
-          hasMasterGuide: Boolean(masterGuide),
-        });
+            if (isMissingChartPointsError(data)) {
+              chunkDebugInfo.parseError = `方案3 第 ${chunkStart}-${chunkEnd} 岁分段缺少 chartPoints。`;
+              const error = new Error(`方案3 第 ${chunkStart}-${chunkEnd} 岁分段返回格式不正确（缺失 chartPoints）。`) as Error & { debugInfo?: DebugInfo };
+              error.debugInfo = mergeDebugInfo(debugInfo, chunkDebugInfo);
+              throw error;
+            }
 
-        const { data, status } = await executeModelRequest(
-          `${chunkStart}-${chunkEnd} 岁分段推演`,
-          requestBody,
-          requestStartedAt,
-          debugInfo
-        );
-        lastStatus = status;
+            const normalizedChartPoints = validateChartPoints(
+              data.chartPoints,
+              chunkStart,
+              chunkEnd,
+              `方案3 第 ${chunkStart}-${chunkEnd} 岁分段`,
+              chunkDebugInfo
+            ) as KLinePoint[];
 
-        if (!data.chartPoints || !Array.isArray(data.chartPoints)) {
-          debugInfo.parseError = `第 ${chunkStart}-${chunkEnd} 岁分段缺少 chartPoints。`;
-          const error = new Error(`第 ${chunkStart}-${chunkEnd} 岁分段返回格式不正确（缺失 chartPoints）。`) as Error & { debugInfo?: DebugInfo };
-          error.debugInfo = debugInfo;
-          throw error;
+            const alignedChartPoints = alignChunkWithPrevious(chartData as KLinePoint[], normalizedChartPoints);
+            if (alignedChartPoints !== normalizedChartPoints) {
+              appendDebugResponse(
+                chunkDebugInfo,
+                `方案3 分段平滑 ${chunkStart}-${chunkEnd}`,
+                `已依据上一段最后一个 close 对当前分段做轻量基线对齐，避免段间断层。`
+              );
+            }
+
+            lastStatus = status;
+            mergeDebugInfo(debugInfo, chunkDebugInfo);
+            chartData.push(...alignedChartPoints);
+          } catch (error) {
+            const enrichedError = error as Error & { debugInfo?: DebugInfo };
+            enrichedError.debugInfo = mergeDebugInfo(debugInfo, chunkDebugInfo);
+            throw enrichedError;
+          }
+        }
+      } else {
+        const chunkTasks: Array<Promise<{
+          chunkStart: number,
+          status: number,
+          normalizedChartPoints: any[],
+          chunkDebugInfo: DebugInfo,
+        }>> = [];
+
+        for (let chunkStart = 1; chunkStart <= yearLimitInt; chunkStart += maxYearsPerRequestInt) {
+          const chunkEnd = Math.min(yearLimitInt, chunkStart + maxYearsPerRequestInt - 1);
+          const requestBody = {
+            prompt: buildChunkPrompt(chunkStart, chunkEnd, masterGuide),
+            systemInstruction: BAZI_SYSTEM_INSTRUCTION,
+            modelName: input.modelName,
+            apiBaseUrl: input.apiBaseUrl,
+            apiKey: input.apiKey,
+          };
+
+          chunkTasks.push((async () => {
+            const chunkDebugInfo = createDebugInfo(Boolean(input.debugMode));
+            appendDebugRequest(chunkDebugInfo, `提交给后端的请求体 ${chunkStart}-${chunkEnd}`, requestBody, input.apiKey);
+
+            console.info('[LifeKLine] 开始分段推演', {
+              chunkStart,
+              chunkEnd,
+              hasMasterGuide: Boolean(masterGuide),
+            });
+
+            try {
+              const { data, status } = await executeModelRequest(
+                `${chunkStart}-${chunkEnd} 岁分段推演`,
+                requestBody,
+                requestStartedAt,
+                chunkDebugInfo
+              );
+
+              if (!data.chartPoints || !Array.isArray(data.chartPoints)) {
+                chunkDebugInfo.parseError = `第 ${chunkStart}-${chunkEnd} 岁分段缺少 chartPoints。`;
+                const error = new Error(`第 ${chunkStart}-${chunkEnd} 岁分段返回格式不正确（缺失 chartPoints）。`) as Error & { debugInfo?: DebugInfo };
+                error.debugInfo = mergeDebugInfo(debugInfo, chunkDebugInfo);
+                throw error;
+              }
+
+              const normalizedChartPoints = validateChartPoints(
+                data.chartPoints,
+                chunkStart,
+                chunkEnd,
+                `第 ${chunkStart}-${chunkEnd} 岁分段`,
+                chunkDebugInfo
+              );
+
+              return {
+                chunkStart,
+                status,
+                normalizedChartPoints,
+                chunkDebugInfo,
+              };
+            } catch (error) {
+              const enrichedError = error as Error & { debugInfo?: DebugInfo };
+              enrichedError.debugInfo = mergeDebugInfo(debugInfo, chunkDebugInfo);
+              throw enrichedError;
+            }
+          })());
         }
 
-        chartData.push(...validateChartPoints(data.chartPoints, chunkStart, chunkEnd, `第 ${chunkStart}-${chunkEnd} 岁分段`, debugInfo));
+        const chunkResults = await Promise.all(chunkTasks);
+        chunkResults.sort((a, b) => a.chunkStart - b.chunkStart);
+
+        for (const chunkResult of chunkResults) {
+          lastStatus = chunkResult.status;
+          mergeDebugInfo(debugInfo, chunkResult.chunkDebugInfo);
+          chartData.push(...chunkResult.normalizedChartPoints);
+        }
       }
     }
 
